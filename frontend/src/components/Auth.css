@@ -95,9 +95,10 @@
   margin-bottom: 1rem;
 }
 
-.google-button img {
-  width: 20px;
-  height: 20px;
+.google-icon {
+  width: 24px;
+  height: 24px;
+  flex-shrink: 0;
 }
 
 .google-button:hover {
