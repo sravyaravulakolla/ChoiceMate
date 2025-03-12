@@ -1,33 +1,51 @@
 import React, { useState, useEffect } from "react";
-import { useLocation } from "react-router-dom";
-import VoiceInput from "./VoiceInput";
-import ChatBox from "./ChatBox";
-import ProductList from "./ProductList";
 import "./Dashboard.css";
 
-const Dashboard = ({ user }) => {
-  //  const location = useLocation();
+const API_URL = process.env.REACT_APP_API_URL || "http://localhost:5000";
 
+const Dashboard = () => {
   const [messages, setMessages] = useState([]);
   const [products, setProducts] = useState([]);
   const [isLoading, setIsLoading] = useState(false);
-  const [activeTab, setActiveTab] = useState("chat");
   const [sessionId, setSessionId] = useState(null);
-  const [isSpeaking, setIsSpeaking] = useState(false);
+  const [user, setUser] = useState(null);
+  const [input, setInput] = useState("");
+  const messagesEndRef = React.useRef(null);
+
+  const scrollToBottom = () => {
+    messagesEndRef.current?.scrollIntoView({ behavior: "smooth" });
+  };
+
+  useEffect(() => {
+    scrollToBottom();
+  }, [messages]);
 
   useEffect(() => {
     const storedToken = localStorage.getItem("token");
+    const storedUser = JSON.parse(localStorage.getItem("user") || "null");
 
-    if (!storedToken) {
-      console.log("Token missing! Redirecting to Auth...");
-      window.location.href = "/"; // Force reload login page
-    } else {
-      console.log("Dashboard Loaded with Token:", storedToken);
-      // Generate a new session ID if one doesn't exist
-      if (!sessionId) {
-        setSessionId(generateSessionId());
-      }
+    if (!storedToken || !storedUser) {
+      console.log("Token or user missing! Redirecting to Auth...");
+      window.location.href = "/";
+      return;
     }
+
+    console.log("Dashboard Loaded with Token:", storedToken);
+    setUser(storedUser);
+
+    // Generate a new session ID if one doesn't exist
+    if (!sessionId) {
+      setSessionId(generateSessionId());
+    }
+
+    // Add initial welcome message
+    setMessages([
+      {
+        role: "assistant",
+        content:
+          "Hi! I'm your personal shopping assistant. What kind of product are you looking for today?",
+      },
+    ]);
   }, []);
 
   // Function to generate a unique session ID
@@ -35,73 +53,60 @@ const Dashboard = ({ user }) => {
     return "session_" + Math.random().toString(36).substr(2, 9);
   };
 
-  // Function to handle text-to-speech
-  const speakText = (text) => {
-    if ("speechSynthesis" in window) {
-      // Cancel any ongoing speech
-      window.speechSynthesis.cancel();
+  const handleSubmit = async (e) => {
+    e.preventDefault();
+    if (!input.trim() || !sessionId || isLoading) return;
 
-      const utterance = new SpeechSynthesisUtterance(text);
-      utterance.onstart = () => setIsSpeaking(true);
-      utterance.onend = () => setIsSpeaking(false);
-      window.speechSynthesis.speak(utterance);
-    }
-  };
-
-  const handleUserInput = async (inputText) => {
-    if (!sessionId) {
-      console.error("No session ID available");
-      return;
-    }
-
+    const userMessage = input.trim();
+    setInput("");
+    setMessages((prev) => [...prev, { role: "user", content: userMessage }]);
     setIsLoading(true);
-    setMessages((prev) => [...prev, { text: inputText, isBot: false }]);
 
     try {
-      const response = await fetch(
-        "http://localhost:5000/api/process-request",
-        {
-          method: "POST",
-          headers: {
-            "Content-Type": "application/json",
-            Authorization: `Bearer ${localStorage.getItem("token")}`,
-          },
-          body: JSON.stringify({
-            query: inputText,
-            sessionId: sessionId,
-          }),
-        }
-      );
+      const response = await fetch(`${API_URL}/api/process-request`, {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+          Authorization: `Bearer ${localStorage.getItem("token")}`,
+        },
+        body: JSON.stringify({
+          query: userMessage,
+          sessionId: sessionId,
+        }),
+      });
+
+      if (!response.ok) {
+        throw new Error("Failed to process request");
+      }
 
       const data = await response.json();
+      setMessages((prev) => [
+        ...prev,
+        { role: "assistant", content: data.botResponse },
+      ]);
 
-      if (response.ok) {
-        const botMessage = { text: data.botResponse, isBot: true };
-        setMessages((prev) => [...prev, botMessage]);
-
-        // Speak the bot's response if in voice mode
-        if (activeTab === "voice") {
-          speakText(data.botResponse);
-        }
-
-        if (data.isComplete && data.products.length > 0) {
-          setProducts(data.products);
-          // Generate new session ID for next conversation
-          setSessionId(generateSessionId());
-        }
-      } else {
-        throw new Error(data.error || "Failed to process request");
+      if (data.products && data.products.length > 0) {
+        setProducts(data.products);
+        // Generate new session ID for next conversation
+        setSessionId(generateSessionId());
       }
     } catch (error) {
       console.error("Error:", error);
-      const errorMessage = "Sorry, I encountered an error. Please try again.";
-      setMessages((prev) => [...prev, { text: errorMessage, isBot: true }]);
-      if (activeTab === "voice") {
-        speakText(errorMessage);
-      }
+      setMessages((prev) => [
+        ...prev,
+        {
+          role: "assistant",
+          content: "Sorry, I encountered an error. Please try again.",
+        },
+      ]);
+    } finally {
+      setIsLoading(false);
     }
-    setIsLoading(false);
   };
+
+  if (!user) {
+    return <div>Loading...</div>;
+  }
 
   return (
     <div className="app">
@@ -116,12 +121,13 @@ const Dashboard = ({ user }) => {
             onClick={async () => {
               try {
                 // Call backend logout endpoint
-                await fetch("http://localhost:5000/auth/logout", {
+                await fetch(`${API_URL}/auth/logout`, {
                   method: "GET",
                   credentials: "include",
                 });
                 // Clear local storage
                 localStorage.removeItem("token");
+                localStorage.removeItem("user");
                 // Redirect to home/login page
                 window.location.href = "/";
               } catch (error) {
@@ -134,55 +140,76 @@ const Dashboard = ({ user }) => {
         </div>
       </header>
 
-      <div className="tabs">
-        <button
-          className={`tab ${activeTab === "chat" ? "active" : ""}`}
-          onClick={() => {
-            setActiveTab("chat");
-            window.speechSynthesis.cancel(); // Stop any ongoing speech
-          }}
-        >
-          Chat
-        </button>
-        <button
-          className={`tab ${activeTab === "voice" ? "active" : ""}`}
-          onClick={() => setActiveTab("voice")}
-        >
-          Speak
-        </button>
-      </div>
-
-      <div className="tab-content">
-        {activeTab === "chat" && <ChatBox onTextSubmit={handleUserInput} />}
-        {activeTab === "voice" && <VoiceInput onVoiceInput={handleUserInput} />}
-      </div>
-
       <div className="chat-container">
         <div className="messages">
           {messages.map((msg, index) => (
             <div
               key={index}
-              className={`message ${msg.isBot ? "bot" : "user"}`}
+              className={`message ${
+                msg.role === "user" ? "user-message" : "assistant-message"
+              }`}
             >
-              {msg.text}
-              {msg.isBot && activeTab === "voice" && (
-                <button
-                  className="speak-button"
-                  onClick={() => speakText(msg.text)}
-                  disabled={isSpeaking}
-                >
-                  {isSpeaking ? "Speaking..." : "🔊"}
-                </button>
-              )}
+              {msg.content}
             </div>
           ))}
           {isLoading && (
-            <div className="message bot">Searching for products...</div>
+            <div className="message assistant-message">
+              <div className="typing-indicator">
+                <span></span>
+                <span></span>
+                <span></span>
+              </div>
+            </div>
           )}
+          <div ref={messagesEndRef} />
         </div>
-      </div>
 
-      <ProductList products={products} isLoading={isLoading} />
+        {products.length > 0 && (
+          <div className="products-container">
+            <h3>Recommended Products</h3>
+            <div className="products-grid">
+              {products.map((product, index) => (
+                <div key={index} className="product-card">
+                  <h4>{product.name}</h4>
+                  <p className="price">${product.price}</p>
+                  <ul className="features-list">
+                    {product.features.map((feature, i) => (
+                      <li key={i}>{feature}</li>
+                    ))}
+                  </ul>
+                  <a
+                    href={product.link}
+                    target="_blank"
+                    rel="noopener noreferrer"
+                    className="view-product-button"
+                  >
+                    View Product
+                  </a>
+                </div>
+              ))}
+            </div>
+          </div>
+        )}
+
+        <form onSubmit={handleSubmit} className="input-container">
+          <input
+            type="text"
+            value={input}
+            onChange={(e) => setInput(e.target.value)}
+            placeholder="Type your message..."
+            disabled={isLoading}
+            onKeyPress={(e) => {
+              if (e.key === "Enter" && !e.shiftKey) {
+                e.preventDefault();
+                handleSubmit(e);
+              }
+            }}
+          />
+          <button type="submit" disabled={isLoading || !input.trim()}>
+            Send
+          </button>
+        </form>
+      </div>
     </div>
   );
 };

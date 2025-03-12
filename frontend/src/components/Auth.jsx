@@ -1,5 +1,5 @@
 import React, { useState, useEffect } from "react";
-import { useNavigate } from "react-router-dom";
+import { useNavigate, useLocation } from "react-router-dom";
 import "./Auth.css";
 
 const API_URL = process.env.REACT_APP_API_URL || "http://localhost:5000";
@@ -15,18 +15,41 @@ const Auth = () => {
   const [success, setSuccess] = useState("");
   const [isLoading, setIsLoading] = useState(false);
   const navigate = useNavigate();
+  const location = useLocation();
 
   useEffect(() => {
-    const hash = window.location.hash;
-    const token = hash.split("token=")[1];
+    // Handle OAuth callback
+    const handleOAuthCallback = () => {
+      const params = new URLSearchParams(location.search);
+      const data = params.get("data");
 
-    if (token) {
-      localStorage.setItem("token", token);
-      setTimeout(() => {
-        navigate("/dashboard", { replace: true });
-      }, 500);
+      if (data) {
+        try {
+          const parsedData = JSON.parse(decodeURIComponent(data));
+          if (parsedData.token && parsedData.user) {
+            // Store token and user data
+            localStorage.setItem("token", parsedData.token);
+            localStorage.setItem("user", JSON.stringify(parsedData.user));
+            navigate("/dashboard");
+            return;
+          }
+        } catch (error) {
+          console.error("Error parsing OAuth callback data:", error);
+          setError("Failed to process login data");
+        }
+      }
+
+      // Check for error parameter
+      const error = params.get("error");
+      if (error) {
+        setError("Authentication failed. Please try again.");
+      }
+    };
+
+    if (location.pathname === "/auth/callback") {
+      handleOAuthCallback();
     }
-  }, [navigate]);
+  }, [location, navigate]);
 
   const handleInputChange = (e) => {
     setFormData({
@@ -47,9 +70,7 @@ const Auth = () => {
         method: "POST",
         headers: {
           "Content-Type": "application/json",
-          Accept: "application/json",
         },
-        credentials: "include",
         body: JSON.stringify(formData),
       });
 
@@ -59,17 +80,12 @@ const Auth = () => {
         throw new Error(data.error || "Authentication failed");
       }
 
-      if (isLogin) {
-        localStorage.setItem("token", data.token);
-        navigate("/dashboard");
-      } else {
-        setSuccess(data.message);
-        // If in development mode, automatically switch to login
-        if (data.message.includes("You can now login")) {
-          setIsLogin(true);
-          setFormData({ email: "", password: "", displayName: "" });
-        }
-      }
+      // Store token and user data for both login and register
+      localStorage.setItem("token", data.token);
+      localStorage.setItem("user", JSON.stringify(data.user));
+
+      // Redirect to dashboard
+      navigate("/dashboard");
     } catch (err) {
       console.error("Auth error:", err);
       setError(err.message || "An error occurred. Please try again.");
@@ -85,11 +101,11 @@ const Auth = () => {
   return (
     <div className="auth-container">
       <div className="auth-box">
-        <h2>ChoiceMate</h2>
+        <h2>{isLogin ? "Login" : "Sign Up"}</h2>
         <p className="auth-subtitle">
           {isLogin
-            ? "Welcome back! Please login to your account."
-            : "Create a new account to get started."}
+            ? "Welcome back! Please login to continue."
+            : "Create an account to get started."}
         </p>
         {error && <div className="error-message">{error}</div>}
         {success && <div className="success-message">{success}</div>}
@@ -142,46 +158,31 @@ const Auth = () => {
           </button>
         </form>
 
-        <div className="divider">
-          <span>OR</span>
-        </div>
+        <div className="divider">or</div>
 
         <button
-          onClick={handleGoogleLogin}
+          type="button"
           className="google-button"
+          onClick={handleGoogleLogin}
           disabled={isLoading}
         >
           <img
-            src="https://www.google.com/favicon.ico"
-            alt="Google"
-            className="google-icon"
+            src="https://upload.wikimedia.org/wikipedia/commons/5/53/Google_%22G%22_Logo.svg"
+            alt="Google Logo"
           />
           Continue with Google
         </button>
 
-        <div className="auth-switch">
-          {isLogin ? (
-            <p>
-              Don't have an account?{" "}
-              <button
-                className="switch-button"
-                onClick={() => setIsLogin(false)}
-              >
-                Sign Up
-              </button>
-            </p>
-          ) : (
-            <p>
-              Already have an account?{" "}
-              <button
-                className="switch-button"
-                onClick={() => setIsLogin(true)}
-              >
-                Login
-              </button>
-            </p>
-          )}
-        </div>
+        <p className="toggle-text">
+          {isLogin ? "Don't have an account? " : "Already have an account? "}
+          <button
+            type="button"
+            className="toggle-button"
+            onClick={() => setIsLogin(!isLogin)}
+          >
+            {isLogin ? "Sign Up" : "Login"}
+          </button>
+        </p>
       </div>
     </div>
   );

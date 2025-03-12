@@ -13,6 +13,9 @@ const MongoStore = require("connect-mongo");
 const crypto = require("crypto");
 const nodemailer = require("nodemailer");
 const path = require("path");
+const bcrypt = require("bcryptjs");
+const { OAuth2Client } = require("google-auth-library");
+const Conversation = require("./models/Conversation");
 
 const app = express();
 const PORT = process.env.PORT || 5000;
@@ -21,16 +24,17 @@ const PORT = process.env.PORT || 5000;
 const genAI = new GoogleGenerativeAI(process.env.GEMINI_API_KEY);
 const model = genAI.getGenerativeModel({ model: "gemini-1.5-pro" });
 
-// MongoDB Connection
+// MongoDB Connection with better error handling
 mongoose
-  .connect(process.env.MONGODB_URI, {
+  .connect(process.env.MONGODB_URI || "mongodb://localhost:27017/choicemate", {
     useNewUrlParser: true,
     useUnifiedTopology: true,
-    serverSelectionTimeoutMS: 5000,
-    socketTimeoutMS: 45000,
   })
-  .then(() => console.log("MongoDB connected"))
-  .catch((err) => console.error("MongoDB connection error:", err));
+  .then(() => console.log("MongoDB connected successfully"))
+  .catch((err) => {
+    console.error("MongoDB connection error:", err);
+    process.exit(1);
+  });
 
 // Email configuration
 const transporter = nodemailer.createTransport({
@@ -153,81 +157,120 @@ function generateMockProducts(prefs) {
   ];
 }
 
+// Helper function to get conversation context
+const getConversationContext = (messages) => {
+  return messages.map((msg) => `${msg.role}: ${msg.content}`).join("\n");
+};
+
 // API Routes
 // Auth Routes
 app.post("/api/auth/register", async (req, res) => {
   try {
     const { email, password, displayName } = req.body;
 
+    if (!email || !password || !displayName) {
+      return res.status(400).json({
+        error:
+          "Please provide all required fields: email, password, and display name",
+      });
+    }
+
     // Check if user already exists
-    const existingUser = await User.findOne({ email });
+    const existingUser = await User.findOne({ email: email.toLowerCase() });
     if (existingUser) {
       return res.status(400).json({ error: "Email already registered" });
     }
 
-    // Create verification token
-    const verificationToken = crypto.randomBytes(32).toString("hex");
-
-    // Create new user
+    // Create new user - password will be hashed by the model's pre-save middleware
     const user = new User({
-      email,
+      email: email.toLowerCase(),
       password,
       displayName,
-      verificationToken,
-      // Auto-verify email in development
-      isEmailVerified: process.env.NODE_ENV === "development",
     });
 
-    await user.save();
+    const savedUser = await user.save();
+    console.log("User saved successfully:", {
+      id: savedUser._id,
+      email: savedUser.email,
+      displayName: savedUser.displayName,
+      hasPassword: !!savedUser.password,
+    });
 
-    // Only send verification email in production
-    if (process.env.NODE_ENV === "production") {
-      const verificationUrl = `${process.env.FRONTEND_URL}/verify-email?token=${verificationToken}`;
-      await transporter.sendMail({
-        from: process.env.EMAIL_USER,
-        to: email,
-        subject: "Verify your email",
-        html: `Please click <a href="${verificationUrl}">here</a> to verify your email.`,
-      });
-    }
+    // Generate JWT token
+    const token = jwt.sign(
+      { userId: savedUser._id },
+      process.env.JWT_SECRET || "default-secret-key",
+      {
+        expiresIn: "24h",
+      }
+    );
 
+    // Send response without password
     res.status(201).json({
-      message:
-        process.env.NODE_ENV === "development"
-          ? "Registration successful. You can now login."
-          : "Registration successful. Please check your email to verify your account.",
+      message: "Registration successful",
+      token,
+      user: {
+        id: savedUser._id,
+        email: savedUser.email,
+        displayName: savedUser.displayName,
+      },
     });
   } catch (error) {
-    console.error("Registration error:", error);
-    res.status(500).json({ error: "Registration failed" });
+    console.error("Registration error details:", error);
+    res.status(500).json({
+      error: "Registration failed",
+      details:
+        process.env.NODE_ENV === "development" ? error.message : undefined,
+    });
   }
 });
 
 app.post("/api/auth/login", async (req, res) => {
   try {
     const { email, password } = req.body;
+    console.log("Login attempt for email:", email);
 
     // Find user
-    const user = await User.findOne({ email });
+    const user = await User.findOne({ email: email.toLowerCase() });
     if (!user) {
+      console.log("Login failed: User not found for email:", email);
       return res.status(401).json({ error: "Invalid credentials" });
     }
 
-    // Check if user is verified
-    if (!user.isEmailVerified) {
-      return res.status(401).json({ error: "Please verify your email first" });
+    console.log("User found:", {
+      id: user._id,
+      email: user.email,
+      hasPassword: !!user.password,
+      isGoogleUser: !!user.googleId,
+    });
+
+    // Check if user has password (Google OAuth users might not)
+    if (!user.password) {
+      console.log("Login failed: No password set for user:", email);
+      return res
+        .status(401)
+        .json({ error: "Please use Google login for this account" });
     }
 
     // Check password
     const isMatch = await user.comparePassword(password);
+    console.log("Password match result:", isMatch);
+
     if (!isMatch) {
+      console.log("Login failed: Invalid password for user:", email);
       return res.status(401).json({ error: "Invalid credentials" });
     }
 
     // Generate JWT
-    const token = jwt.sign({ userId: user._id }, process.env.JWT_SECRET, {
-      expiresIn: "24h",
-    });
+    const token = jwt.sign(
+      { userId: user._id },
+      process.env.JWT_SECRET || "default-secret-key",
+      {
+        expiresIn: "24h",
+      }
+    );
+
+    console.log("Login successful for user:", email);
 
     res.json({
       token,
@@ -239,7 +282,7 @@ app.post("/api/auth/login", async (req, res) => {
     });
   } catch (error) {
     console.error("Login error:", error);
-    res.status(500).json({ error: "Login failed" });
+    res.status(500).json({ error: "Login failed", details: error.message });
   }
 });
 
@@ -253,18 +296,50 @@ app.get(
 
 app.get(
   "/auth/google/callback",
-  passport.authenticate("google", { failureRedirect: "/login" }),
-  (req, res) => {
-    if (!req.user) {
-      console.error("User not found after Google login.");
-      return res.redirect("http://localhost:3000/login?error=auth_failed");
+  passport.authenticate("google", {
+    failureRedirect: "/login",
+    session: false,
+  }),
+  async (req, res) => {
+    try {
+      if (!req.user) {
+        console.error("User not found after Google login.");
+        return res.redirect(
+          `${
+            process.env.FRONTEND_URL || "http://localhost:3000"
+          }/login?error=auth_failed`
+        );
+      }
+
+      // Generate JWT token
+      const token = jwt.sign({ userId: req.user._id }, process.env.JWT_SECRET, {
+        expiresIn: "24h",
+      });
+
+      // Redirect to frontend with token and user data
+      const userData = {
+        id: req.user._id,
+        email: req.user.email,
+        displayName: req.user.displayName,
+      };
+
+      // Encode the data to pass in URL
+      const data = encodeURIComponent(
+        JSON.stringify({ token, user: userData })
+      );
+      res.redirect(
+        `${
+          process.env.FRONTEND_URL || "http://localhost:3000"
+        }/auth/callback?data=${data}`
+      );
+    } catch (error) {
+      console.error("Google callback error:", error);
+      res.redirect(
+        `${
+          process.env.FRONTEND_URL || "http://localhost:3000"
+        }/login?error=auth_failed`
+      );
     }
-
-    const token = jwt.sign({ userId: req.user._id }, process.env.JWT_SECRET, {
-      expiresIn: "24h",
-    });
-
-    res.redirect(`http://localhost:3000/auth/callback#token=${token}`);
   }
 );
 
@@ -311,183 +386,95 @@ app.get("/api/conversations", authenticateJWT, async (req, res) => {
   }
 });
 
+// Process user request endpoint
 app.post("/api/process-request", authenticateJWT, async (req, res) => {
-  const { query, sessionId } = req.body;
-  const userId = req.userId;
-
-  if (!sessionId || !query) {
-    return res.status(400).json({
-      botResponse: "Both session ID and query are required",
-      products: [],
-      isComplete: false,
-    });
-  }
-
   try {
-    const user = await User.findOne({ googleId: userId });
+    const { query, sessionId } = req.body;
+    const user = await User.findById(req.userId);
+
     if (!user) {
-      return res.status(404).json({
-        botResponse: "User not found",
-        products: [],
-        isComplete: false,
-      });
+      return res.status(404).json({ error: "User not found" });
     }
 
-    let session = user.sessions.find(
-      (s) => s.sessionId === sessionId && s.isActive
-    );
-
+    let session = user.sessions.find((s) => s.sessionId === sessionId);
     if (!session) {
-      user.sessions.push({
+      session = {
         sessionId,
         messages: [],
         preferences: { category: null, budget: null, features: [] },
         isActive: true,
-      });
-      session = user.sessions[user.sessions.length - 1];
+        startTime: new Date(),
+        lastActivity: new Date(),
+      };
+      user.sessions.push(session);
     }
 
+    // Add user message to session
     session.messages.push({
       role: "user",
       content: query,
       timestamp: new Date(),
     });
-    session.lastActivity = new Date();
 
-    const conversationHistory = session.messages
-      .map((msg) => `${msg.role}: ${msg.content}`)
-      .join("\n");
+    // Get conversation history
+    const conversationHistory = getConversationContext(session.messages);
 
-    const prompt = `As a shopping assistant, collect these details:
-1. Product category (required)
-2. Budget range (required)
-3. Desired features (optional)
+    // Create a more conversational prompt
+    const prompt = `You are a friendly and helpful shopping assistant. Your goal is to help users find the perfect products by understanding their needs through natural conversation.
 
-Current conversation:
+Previous conversation:
 ${conversationHistory}
 
-Current preferences:
-${formatPreferences(session.preferences)}
-
 Your task:
-- If all required info (category and budget) is present, respond with "READY|SUMMARY"
-- If missing info, ask ONE follow-up question
-- Never answer the question directly, just guide the conversation`;
+1. Be conversational and friendly
+2. If you don't have enough information, ask follow-up questions about:
+   - Product category/type
+   - Budget range
+   - Specific features or preferences
+   - Use cases or requirements
+3. Once you have enough information, suggest relevant products
+4. Always maintain a helpful and engaging tone
 
+Current preferences:
+${
+  session.preferences
+    ? `
+- Category: ${session.preferences.category || "Not specified"}
+- Budget: ${session.preferences.budget || "Not specified"}
+- Features: ${session.preferences.features?.join(", ") || "None"}`
+    : "No preferences set yet"
+}
+
+Please respond naturally to the user's last message.`;
+
+    // Generate response using Gemini
     const result = await model.generateContent(prompt);
     const response = await result.response;
     const botResponse = response.text();
 
+    // Add assistant's response to session
     session.messages.push({
       role: "assistant",
       content: botResponse,
       timestamp: new Date(),
     });
 
-    if (botResponse.startsWith("READY|")) {
-      const summary = botResponse.split("|")[1];
-      session.preferences = extractPreferences(summary);
-      session.isActive = false;
+    // Update session's last activity
+    session.lastActivity = new Date();
 
-      const mockProducts = generateMockProducts(session.preferences);
-
-      await user.save();
-      return res.json({
-        botResponse: `Great! Here are suggestions based on: ${summary}`,
-        products: mockProducts,
-        isComplete: true,
-      });
-    }
-
+    // Save updated user document
     await user.save();
 
+    // Send response
     res.json({
       botResponse,
-      products: [],
-      isComplete: false,
+      sessionId,
+      preferences: session.preferences,
+      products: [], // We'll implement product recommendations later
     });
   } catch (error) {
-    console.error("Process error:", error);
-    res.status(500).json({
-      botResponse: "Sorry, I'm having trouble. Please try again.",
-      products: [],
-      isComplete: false,
-    });
-  }
-});
-
-app.get("/api/auth/verify-email", async (req, res) => {
-  try {
-    const { token } = req.query;
-    const user = await User.findOne({ verificationToken: token });
-
-    if (!user) {
-      return res.status(400).json({ error: "Invalid verification token" });
-    }
-
-    user.isEmailVerified = true;
-    user.verificationToken = undefined;
-    await user.save();
-
-    res.json({ message: "Email verified successfully" });
-  } catch (error) {
-    console.error("Email verification error:", error);
-    res.status(500).json({ error: "Email verification failed" });
-  }
-});
-
-app.post("/api/auth/forgot-password", async (req, res) => {
-  try {
-    const { email } = req.body;
-    const user = await User.findOne({ email });
-
-    if (!user) {
-      return res.status(404).json({ error: "User not found" });
-    }
-
-    const resetToken = crypto.randomBytes(32).toString("hex");
-    user.resetPasswordToken = resetToken;
-    user.resetPasswordExpires = Date.now() + 3600000; // 1 hour
-
-    await user.save();
-
-    const resetUrl = `http://localhost:3000/reset-password?token=${resetToken}`;
-    await transporter.sendMail({
-      from: process.env.EMAIL_USER,
-      to: email,
-      subject: "Reset your password",
-      html: `Please click <a href="${resetUrl}">here</a> to reset your password.`,
-    });
-
-    res.json({ message: "Password reset email sent" });
-  } catch (error) {
-    console.error("Forgot password error:", error);
+    console.error("Process request error:", error);
     res.status(500).json({ error: "Failed to process request" });
-  }
-});
-
-app.post("/api/auth/reset-password", async (req, res) => {
-  try {
-    const { token, password } = req.body;
-
-    const user = await User.findOne({
-      resetPasswordToken: token,
-      resetPasswordExpires: { $gt: Date.now() },
-    });
-
-    if (!user) {
-      return res.status(400).json({ error: "Invalid or expired reset token" });
-    }
-
-    user.password = password;
-    user.resetPasswordToken = undefined;
-    user.resetPasswordExpires = undefined;
-    await user.save();
-
-    res.json({ message: "Password reset successful" });
-  } catch (error) {
-    console.error("Reset password error:", error);
-    res.status(500).json({ error: "Failed to reset password" });
   }
 });
 
