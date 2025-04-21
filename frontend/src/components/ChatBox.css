@@ -48,3 +48,12 @@
 .chat-submit:active {
   transform: translateY(1px);
 } 
+.chat-recommend {
+  margin-left: 8px;
+  padding: 8px 12px;
+  background-color: #007bff;
+  color: white;
+  border: none;
+  border-radius: 4px;
+  cursor: pointer;
+}

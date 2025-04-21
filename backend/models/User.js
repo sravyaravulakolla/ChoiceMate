@@ -18,6 +18,10 @@ const sessionSchema = new mongoose.Schema({
     budget: String,
     features: [String],
   },
+  summary: {
+    type: String,
+    default: "",
+  },
 });
 
 const userSchema = new mongoose.Schema({

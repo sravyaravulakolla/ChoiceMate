@@ -1,5 +1,37 @@
 const mongoose = require("mongoose");
 
+const messageSchema = new mongoose.Schema({
+  role: {
+    type: String,
+    enum: ["user", "assistant"],
+    required: true,
+  },
+  content: {
+    type: String,
+    required: true,
+  },
+  timestamp: {
+    type: Date,
+    default: Date.now,
+  },
+});
+
+const preferencesSchema = new mongoose.Schema({
+  category: {
+    type: String,
+    default: null,
+  },
+  budget: {
+    type: String,
+    default: null,
+  },
+  features: [
+    {
+      type: String,
+    },
+  ],
+});
+
 const conversationSchema = new mongoose.Schema({
   userId: {
     type: mongoose.Schema.Types.ObjectId,
@@ -10,27 +42,15 @@ const conversationSchema = new mongoose.Schema({
     type: String,
     required: true,
   },
-  messages: [
-    {
-      role: {
-        type: String,
-        enum: ["user", "assistant"],
-        required: true,
-      },
-      content: {
-        type: String,
-        required: true,
-      },
-      timestamp: {
-        type: Date,
-        default: Date.now,
-      },
-    },
-  ],
+  messages: [messageSchema],
+  summary: {
+    type: String,
+    default: "",
+  },
+  
   preferences: {
-    type: Map,
-    of: String,
-    default: new Map(),
+    type: preferencesSchema,
+    default: () => ({}),
   },
   createdAt: {
     type: Date,
@@ -40,7 +60,11 @@ const conversationSchema = new mongoose.Schema({
     type: Date,
     default: Date.now,
   },
+  // timestamps: true 
 });
+
+// Create compound index for userId and sessionId
+conversationSchema.index({ userId: 1, sessionId: 1 }, { unique: true });
 
 // Update the updatedAt timestamp before saving
 conversationSchema.pre("save", function (next) {

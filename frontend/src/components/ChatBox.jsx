@@ -1,7 +1,7 @@
 import React, { useState } from "react";
 import "./ChatBox.css";
 
-const ChatBox = ({ onTextSubmit }) => {
+const ChatBox = ({ onTextSubmit, sessionId, onRecommendation }) => {
   const [inputText, setInputText] = useState("");
 
   const handleSubmit = (e) => {
@@ -9,6 +9,14 @@ const ChatBox = ({ onTextSubmit }) => {
     if (inputText.trim()) {
       onTextSubmit(inputText);
       setInputText("");
+    }
+  };
+
+  const handleRecommend = () => {
+    if (onRecommendation && sessionId) {
+      onRecommendation(sessionId);
+    } else {
+      console.warn("Missing sessionId or onRecommendation handler");
     }
   };
 
@@ -24,6 +32,13 @@ const ChatBox = ({ onTextSubmit }) => {
         />
         <button type="submit" className="chat-submit">
           Send
+        </button>
+        <button
+          type="button"
+          className="chat-recommend"
+          onClick={handleRecommend}
+        >
+          Recommend
         </button>
       </div>
     </form>
