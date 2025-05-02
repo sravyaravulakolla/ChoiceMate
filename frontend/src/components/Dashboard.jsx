@@ -97,6 +97,25 @@ const Dashboard = () => {
     setSessionId(conversation.sessionId);
     setProducts([]); // Clear products when switching conversations
   };
+  const showRecommendationByIds = async (ids) => {
+    try {
+      const response = await fetch(`${API_URL}/api/get-products-by-ids`, {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+          Authorization: `Bearer ${localStorage.getItem("token")}`,
+        },
+        body: JSON.stringify({ ids }),
+      });
+
+      const data = await response.json();
+      setProducts(data.products);
+      setShowRecommendations(true);
+ // same modal logic as before
+    } catch (error) {
+      console.error("Failed to fetch recommendations by ID:", error);
+    }
+  };
 
   // Function to generate a unique session ID
   const generateSessionId = () => {
@@ -268,96 +287,108 @@ const Dashboard = () => {
             ))}
           </div>
         </div>
-        
+
 
         {/* Chat Area */}
         <div className="chat-area">
           {/* Show category selection before chat starts */}
-{!categoryChosen && (
-  <div className="category-selection">
-    <h3>Select a product category to get started:</h3>
-    <select
-      value={selectedCategory}
-      onChange={(e) => setSelectedCategory(e.target.value)}
-    >
-      <option value="">-- Choose Category --</option>
-      {categories.map((cat) => (
-        <option key={cat} value={cat}>
-          {cat}
-        </option>
-      ))}
-    </select>
-    <button
-      onClick={async () => {
-        if (!selectedCategory) return alert("Please select a category");
+          {!categoryChosen && (
+            <div className="category-selection">
+              <h3>Select a product category to get started:</h3>
+              <select
+                value={selectedCategory}
+                onChange={(e) => setSelectedCategory(e.target.value)}
+              >
+                <option value="">-- Choose Category --</option>
+                {categories.map((cat) => (
+                  <option key={cat} value={cat}>
+                    {cat}
+                  </option>
+                ))}
+              </select>
+              <button
+                onClick={async () => {
+                  if (!selectedCategory) return alert("Please select a category");
 
-        // Add category to chat history as user message
-        setMessages((prev) => [
-          ...prev,
-          { role: "user", content: selectedCategory },
-        ]);
-        setCategoryChosen(true);
+                  // Add category to chat history as user message
+                  setMessages((prev) => [
+                    ...prev,
+                    { role: "user", content: selectedCategory },
+                  ]);
+                  setCategoryChosen(true);
 
-        // Send to /api/process-request
-        setIsLoading(true);
-        try {
-          const response = await fetch(`${API_URL}/api/process-request`, {
-            method: "POST",
-            headers: {
-              "Content-Type": "application/json",
-              Authorization: `Bearer ${localStorage.getItem("token")}`,
-            },
-            body: JSON.stringify({
-              query: selectedCategory,
-              sessionId: sessionId,
-            }),
-          });
+                  // Send to /api/process-request
+                  setIsLoading(true);
+                  try {
+                    const response = await fetch(`${API_URL}/api/process-request`, {
+                      method: "POST",
+                      headers: {
+                        "Content-Type": "application/json",
+                        Authorization: `Bearer ${localStorage.getItem("token")}`,
+                      },
+                      body: JSON.stringify({
+                        query: selectedCategory,
+                        sessionId: sessionId,
+                      }),
+                    });
 
-          const data = await response.json();
+                    const data = await response.json();
 
-          setMessages((prev) => [
-            ...prev,
-            { role: "assistant", content: data.botResponse },
-          ]);
+                    setMessages((prev) => [
+                      ...prev,
+                      { role: "assistant", content: data.botResponse },
+                    ]);
 
-          if (data.recommendations && data.recommendations.length > 0) {
-            setProducts(data.recommendations);
-          }
-        } catch (error) {
-          console.error("Error during category process:", error);
-        } finally {
-          setIsLoading(false);
-        }
+                    if (data.recommendations && data.recommendations.length > 0) {
+                      setProducts(data.recommendations);
+                    }
+                  } catch (error) {
+                    console.error("Error during category process:", error);
+                  } finally {
+                    setIsLoading(false);
+                  }
 
-        // Update preferences (optional)
-        await fetch(`${API_URL}/api/conversation/update-category`, {
-          method: "POST",
-          headers: {
-            "Content-Type": "application/json",
-            Authorization: `Bearer ${localStorage.getItem("token")}`,
-          },
-          body: JSON.stringify({
-            sessionId,
-            category: selectedCategory,
-          }),
-        });
-      }}
-    >
-      Start
-    </button>
-  </div>
-)}
+                  // Update preferences (optional)
+                  await fetch(`${API_URL}/api/conversation/update-category`, {
+                    method: "POST",
+                    headers: {
+                      "Content-Type": "application/json",
+                      Authorization: `Bearer ${localStorage.getItem("token")}`,
+                    },
+                    body: JSON.stringify({
+                      sessionId,
+                      category: selectedCategory,
+                    }),
+                  });
+                }}
+              >
+                Start
+              </button>
+            </div>
+          )}
 
           <div className="messages">
-            {messages.map((msg, index) => (
-              <div
-                key={index}
-                className={`message ${msg.role === "user" ? "user-message" : "assistant-message"
-                  }`}
-              >
-                {msg.content}
-              </div>
-            ))}
+            {messages.map((msg, index) => {
+              if (msg.role === "system" && msg.content) {
+                return (
+                  <div key={index} className="recommendation-message">
+                    <button onClick={() => showRecommendationByIds(msg.content)}>
+                      View Recommendations
+                    </button>
+                  </div>
+                );
+              }
+
+              return (
+                <div
+                  key={index}
+                  className={`message ${msg.role === "user" ? "user-message" : "assistant-message"}`}
+                >
+                  {msg.content}
+                </div>
+              );
+            })}
+
             {isLoading && (
               <div className="message assistant-message">
                 <div className="typing-indicator">

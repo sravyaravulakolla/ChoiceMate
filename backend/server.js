@@ -544,6 +544,10 @@ const PORT = process.env.PORT || 5000;
 const genAI = new GoogleGenerativeAI(process.env.GEMINI_API_KEY);
 const model = genAI.getGenerativeModel({ model: "gemini-1.5-pro" });
 
+
+const fs = require("fs");
+const products = JSON.parse(fs.readFileSync("C:\\Users\\Vaishnavi\\4-2\\MajorProject\\ChoiceMate\\backend\\combined_products.json", "utf-8"));
+
 // MongoDB Connection with better error handling
 mongoose
   .connect(process.env.MONGODB_URI || "mongodb://localhost:27017/choicemate", {
@@ -914,6 +918,70 @@ app.post("/api/conversation/update-category", authenticateJWT, async (req, res) 
   }
 });
 
+app.post("/api/get-products-by-message", async (req, res) => {
+  const { sessionId, messageId } = req.body;
+
+  if (!sessionId || !messageId) {
+    return res.status(400).json({ error: "sessionId and messageId are required" });
+  }
+
+  try {
+    // Load conversation (MongoDB example)
+    const conversation = await Conversation.findOne({ sessionId });
+
+    if (!conversation) {
+      return res.status(404).json({ error: "Conversation not found" });
+    }
+
+    // Find the message with recommendations
+    const message = conversation.messages.find(msg => msg._id.toString() === messageId);
+
+    if (!message || !message.recommendedProductIds) {
+      return res.status(404).json({ error: "No recommended products found in that message" });
+    }
+
+    const productIds = message.recommendedProductIds;
+
+    // Load product data from JSON
+    const products = JSON.parse(fs.readFileSync("./data/products.json", "utf-8"));
+    const matchedProducts = products.filter(p => productIds.includes(String(p.id)));
+
+    res.json({ products: matchedProducts });
+
+  } catch (err) {
+    console.error("Error retrieving recommendations:", err);
+    res.status(500).json({ error: "Internal server error" });
+  }
+});
+
+app.post("/api/get-products-by-ids", async (req, res) => {
+  const { productIds } = req.body;
+
+  // Validate that productIds is provided and is an array
+  if (!productIds || !Array.isArray(productIds) || productIds.length === 0) {
+    return res.status(400).json({ error: "productIds must be a non-empty array" });
+  }
+
+  try {
+    // Load product data from JSON (assuming it's a local file or replace with DB if necessary)
+
+    // Filter products by IDs provided in the request
+    const matchedProducts = products.filter(p => productIds.includes(String(p.id)));
+
+    if (matchedProducts.length === 0) {
+      return res.status(404).json({ error: "No products found for the given IDs" });
+    }
+
+    // Return the matched products
+    res.json({ products: matchedProducts });
+
+  } catch (err) {
+    console.error("Error retrieving products:", err);
+    res.status(500).json({ error: "Internal server error" });
+  }
+});
+
+
 
 // Process user request endpoint
 app.post("/api/process-request", authenticateJWT, async (req, res) => {
@@ -1106,7 +1174,7 @@ app.post("/api/recommend/test", (req, res) => {
 app.post("/api/recommend", authenticateJWT, async (req, res) => {
   try {
     const { sessionId } = req.body;
-    console.log("sessionId: "+sessionId);
+    console.log("sessionId: " + sessionId);
     // Step 1: Get session from MongoDB
     const user = await User.findById(req.userId);
     console.log(user);
@@ -1122,7 +1190,7 @@ app.post("/api/recommend", authenticateJWT, async (req, res) => {
         userId: req.userId,
         sessionId: sessionId,
         messages: [],
-        summary:"",
+        summary: "",
         preferences: {
           category: null,
           budget: null,
@@ -1132,17 +1200,31 @@ app.post("/api/recommend", authenticateJWT, async (req, res) => {
     }
 
     const summary = currentConversation.summary;
-    const category=currentConversation.preferences.category;
+    const category = currentConversation.preferences.category;
     // Step 2: Send summary to Flask API
     console.log({
       category: category,
       query: summary
     });
-    
+
     const flaskResponse = await axios.post("http://localhost:8000/recommend", {
-      category:category,
+      category: category,
       query: summary,
     });
+    const recommendedProducts = flaskResponse.data.recommendations || [];
+
+    if (recommendedProducts.length > 0) {
+      const recommendedIds = recommendedProducts.map(p => p.id);
+
+      // Save message with recommended product IDs
+      currentConversation.messages.push({
+        role: "system",
+        content: recommendedIds,
+        timestamp: new Date(),
+      });
+
+      await currentConversation.save();
+    }
 
     // Step 3: Return Flask's response to frontend
     res.json(flaskResponse.data);
