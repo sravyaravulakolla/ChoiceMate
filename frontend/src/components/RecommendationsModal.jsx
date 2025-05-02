@@ -22,7 +22,7 @@ const RecommendationsModal = ({ products, onClose }) => {
                 ))}
               </ul>
               <a
-                href={product.link}
+                href={product.link||product.product_link}
                 target="_blank"
                 rel="noopener noreferrer"
                 className="view-product-button"

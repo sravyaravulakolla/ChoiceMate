@@ -536,9 +536,12 @@ const bcrypt = require("bcryptjs");
 const { OAuth2Client } = require("google-auth-library");
 const Conversation = require("./models/Conversation");
 const axios = require('axios');
+const { generateGeminiResponse } = require("./geminiClient");
 
 const app = express();
 const PORT = process.env.PORT || 5000;
+
+
 
 // Initialize Gemini API
 const genAI = new GoogleGenerativeAI(process.env.GEMINI_API_KEY);
@@ -955,26 +958,36 @@ app.post("/api/get-products-by-message", async (req, res) => {
 });
 
 app.post("/api/get-products-by-ids", async (req, res) => {
-  const { productIds } = req.body;
+  const { ids: productEntries } = req.body;
 
-  // Validate that productIds is provided and is an array
-  if (!productIds || !Array.isArray(productIds) || productIds.length === 0) {
-    return res.status(400).json({ error: "productIds must be a non-empty array" });
+  if (!productEntries || !Array.isArray(productEntries) || productEntries.length === 0) {
+    return res.status(400).json({ error: "ids must be a non-empty array" });
   }
 
   try {
-    // Load product data from JSON (assuming it's a local file or replace with DB if necessary)
+    // Extract just the IDs from the objects (support both raw IDs and { id, reason } objects)
+    const productIds = productEntries.map(entry => 
+      typeof entry === "object" && entry.id ? String(entry.id) : String(entry)
+    );
 
-    // Filter products by IDs provided in the request
-    const matchedProducts = products.filter(p => productIds.includes(String(p.id)));
+    const matchedProducts = products
+      .filter(p => productIds.includes(String(p.id)))
+      .map(p => {
+        const match = productEntries.find(entry =>
+          typeof entry === "object" && entry.id === p.id
+        );
+        return {
+          ...p,
+          reason: match?.reason || null,  // attach reason if provided
+        };
+      });
 
     if (matchedProducts.length === 0) {
+      console.log("No products found for the given IDs");
       return res.status(404).json({ error: "No products found for the given IDs" });
     }
 
-    // Return the matched products
     res.json({ products: matchedProducts });
-
   } catch (err) {
     console.error("Error retrieving products:", err);
     res.status(500).json({ error: "Internal server error" });
@@ -1072,10 +1085,10 @@ ${currentConversation.preferences
 Please respond naturally to the user's last message.`;
 
     // Generate response using Gemini
-    const result = await model.generateContent(prompt);
-    const response = await result.response;
-    const botResponse = response.text();
-
+    // const result = await model.generateContent(prompt);
+    // const response = await result.response;
+    // const botResponse = response.text();
+    const botResponse = await generateGeminiResponse(prompt);
     // Add assistant's response
     currentConversation.messages.push({
       role: "assistant",
@@ -1091,9 +1104,12 @@ Please respond naturally to the user's last message.`;
     Conversation:
     ${getConversationContext(currentConversation.messages)}
     `;
-    const summaryResult = await model.generateContent(summaryPrompt);
-    const summaryResponse = await summaryResult.response;
-    currentConversation.summary = summaryResponse.text();
+    // const summaryResult = await model.generateContent(summaryPrompt);
+    // const summaryResponse = await summaryResult.response;
+    // currentConversation.summary = summaryResponse.text();
+    const summaryText = await generateGeminiResponse(summaryPrompt);
+    currentConversation.summary = summaryText;
+
     console.log("currentConversation summarry: " + currentConversation.summary);
     // Update conversation's last activity
     currentConversation.updatedAt = new Date();
@@ -1214,12 +1230,15 @@ app.post("/api/recommend", authenticateJWT, async (req, res) => {
     const recommendedProducts = flaskResponse.data.recommendations || [];
 
     if (recommendedProducts.length > 0) {
-      const recommendedIds = recommendedProducts.map(p => p.id);
-
+      // const recommendedIds = recommendedProducts.map(p => p.id);
+      const recommendedDetails = recommendedProducts.map(p => ({
+        id: p.id,
+        reason: p.reason
+      }));
       // Save message with recommended product IDs
       currentConversation.messages.push({
         role: "system",
-        content: recommendedIds,
+        content: recommendedDetails,
         timestamp: new Date(),
       });
 

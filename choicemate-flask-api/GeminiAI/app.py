@@ -5,6 +5,17 @@ import json
 import pandas as pd
 from flask import Flask, request, jsonify
 from datetime import datetime
+import random
+import time
+
+api_keys = [
+    os.getenv("GEMINI_API_KEY1"), os.getenv("GEMINI_API_KEY2"),
+    os.getenv("GEMINI_API_KEY3"), os.getenv("GEMINI_API_KEY4"),
+    os.getenv("GEMINI_API_KEY5"), os.getenv("GEMINI_API_KEY6"),
+    os.getenv("GEMINI_API_KEY7"), os.getenv("GEMINI_API_KEY8"),
+    os.getenv("GEMINI_API_KEY9")
+]
+
 
 # ---------- Configuration ----------
 genai.configure(api_key=os.getenv("GEMINI_API_KEY"))
@@ -19,7 +30,24 @@ df_combined['id'] = df_combined.index + 1
 def get_subcategories_by_category(category):
     subcats = df_combined[df_combined['category'] == category]['subcategory'].unique()
     return set(subcats)
+def call_gemini_with_retries(prompt, timeout_seconds=120):
+    start_time = time.time()
+    last_exception = None
 
+    while (time.time() - start_time) < timeout_seconds:
+        for key in api_keys:
+            try:
+                genai.configure(api_key=key)
+                gemini = genai.GenerativeModel("gemini-1.5-pro")
+                response = gemini.generate_content(prompt)
+                return response
+            except Exception as e:
+                print(f"[{datetime.now()}] Error with API key {key[:6]}...: {e}")
+                last_exception = e
+                time.sleep(random.uniform(1.5, 3.0))  # brief cooldown between keys
+
+    print("All keys failed after 2 minutes.")
+    raise last_exception
 
 def get_relevant_subcategories(category, query, combined_subcats):
     prompt = f"""
@@ -40,7 +68,7 @@ Return your answer as a clean Python list like:
 ['Subcategory A', 'Subcategory B', 'Subcategory C']
 Only return the list, nothing else.
 """
-    response = gemini.generate_content(prompt)
+    response = call_gemini_with_retries(prompt)
     try:
         relevant_subcats = eval(response.text)
     except Exception:
@@ -69,7 +97,7 @@ Respond in this JSON format:
 Products:
 {json.dumps(product_list, indent=2)}
 """
-    response = gemini.generate_content(prompt)
+    response = call_gemini_with_retries(prompt)
     response_text = response.text.strip()
 
     if response_text.startswith("```json"):

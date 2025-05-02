@@ -375,6 +375,7 @@ const Dashboard = () => {
                     <button onClick={() => showRecommendationByIds(msg.content)}>
                       View Recommendations
                     </button>
+                    
                   </div>
                 );
               }
