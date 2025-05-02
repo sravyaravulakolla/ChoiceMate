@@ -890,6 +890,31 @@ app.get("/api/conversations", authenticateJWT, async (req, res) => {
   }
 });
 
+app.post("/api/conversation/update-category", authenticateJWT, async (req, res) => {
+  try {
+    const { sessionId, category } = req.body;
+
+    const conversation = await Conversation.findOne({
+      userId: req.userId,
+      sessionId,
+    });
+
+    if (!conversation) {
+      return res.status(404).json({ error: "Conversation not found" });
+    }
+
+    conversation.preferences.category = category;
+    conversation.updatedAt = new Date();
+    await conversation.save();
+
+    res.json({ message: "Category updated", preferences: conversation.preferences });
+  } catch (err) {
+    console.error("Error updating category:", err);
+    res.status(500).json({ error: "Failed to update category" });
+  }
+});
+
+
 // Process user request endpoint
 app.post("/api/process-request", authenticateJWT, async (req, res) => {
   try {
@@ -1107,9 +1132,15 @@ app.post("/api/recommend", authenticateJWT, async (req, res) => {
     }
 
     const summary = currentConversation.summary;
-
+    const category=currentConversation.preferences.category;
     // Step 2: Send summary to Flask API
+    console.log({
+      category: category,
+      query: summary
+    });
+    
     const flaskResponse = await axios.post("http://localhost:8000/recommend", {
+      category:category,
       query: summary,
     });
 

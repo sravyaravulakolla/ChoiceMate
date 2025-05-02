@@ -1,0 +1,8 @@
+Flask
+pandas
+numpy
+beautifulsoup4
+python-dotenv
+google-generativeai
+transformers
+scikit-learn

@@ -4,6 +4,18 @@ import RecommendationsModal from "./RecommendationsModal"; // Add this import
 
 const API_URL = process.env.REACT_APP_API_URL || "http://localhost:5000";
 
+const categories = [
+  'Cameras & Photography', 'Computer Accessories', 'Memory Cards',
+  'Mobile Accessories', 'Smartwatches', 'Laptops',
+  'Printers & Scanners', 'Networking Devices', 'Monitors',
+  'Televisions', 'Headphones & Earbuds', 'Speakers & Soundbars',
+  'Smart Home Devices', 'Air Conditioners', 'Refrigerators',
+  'Washing Machines', "Men's Clothing", "Women's Clothing",
+  'Kitchen Appliances', 'Home Furnishing', 'Makeup & Skincare',
+  'Health & Grooming', 'Grocery & Food', 'Gym & Strength Training',
+  'Toys & Games', 'Car & Bike Accessories'
+];
+
 const Dashboard = () => {
   const [messages, setMessages] = useState([]);
   const [products, setProducts] = useState([]);
@@ -13,6 +25,9 @@ const Dashboard = () => {
   const [input, setInput] = useState("");
   const [conversations, setConversations] = useState([]);
   const [activeConversation, setActiveConversation] = useState(null);
+  const [selectedCategory, setSelectedCategory] = useState("");
+  const [categoryChosen, setCategoryChosen] = useState(false);
+
   const messagesEndRef = React.useRef(null);
   const [showRecommendations, setShowRecommendations] = useState(false);
 
@@ -253,9 +268,86 @@ const Dashboard = () => {
             ))}
           </div>
         </div>
+        
 
         {/* Chat Area */}
         <div className="chat-area">
+          {/* Show category selection before chat starts */}
+{!categoryChosen && (
+  <div className="category-selection">
+    <h3>Select a product category to get started:</h3>
+    <select
+      value={selectedCategory}
+      onChange={(e) => setSelectedCategory(e.target.value)}
+    >
+      <option value="">-- Choose Category --</option>
+      {categories.map((cat) => (
+        <option key={cat} value={cat}>
+          {cat}
+        </option>
+      ))}
+    </select>
+    <button
+      onClick={async () => {
+        if (!selectedCategory) return alert("Please select a category");
+
+        // Add category to chat history as user message
+        setMessages((prev) => [
+          ...prev,
+          { role: "user", content: selectedCategory },
+        ]);
+        setCategoryChosen(true);
+
+        // Send to /api/process-request
+        setIsLoading(true);
+        try {
+          const response = await fetch(`${API_URL}/api/process-request`, {
+            method: "POST",
+            headers: {
+              "Content-Type": "application/json",
+              Authorization: `Bearer ${localStorage.getItem("token")}`,
+            },
+            body: JSON.stringify({
+              query: selectedCategory,
+              sessionId: sessionId,
+            }),
+          });
+
+          const data = await response.json();
+
+          setMessages((prev) => [
+            ...prev,
+            { role: "assistant", content: data.botResponse },
+          ]);
+
+          if (data.recommendations && data.recommendations.length > 0) {
+            setProducts(data.recommendations);
+          }
+        } catch (error) {
+          console.error("Error during category process:", error);
+        } finally {
+          setIsLoading(false);
+        }
+
+        // Update preferences (optional)
+        await fetch(`${API_URL}/api/conversation/update-category`, {
+          method: "POST",
+          headers: {
+            "Content-Type": "application/json",
+            Authorization: `Bearer ${localStorage.getItem("token")}`,
+          },
+          body: JSON.stringify({
+            sessionId,
+            category: selectedCategory,
+          }),
+        });
+      }}
+    >
+      Start
+    </button>
+  </div>
+)}
+
           <div className="messages">
             {messages.map((msg, index) => (
               <div
