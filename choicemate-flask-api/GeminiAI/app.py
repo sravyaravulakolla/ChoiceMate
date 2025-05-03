@@ -95,7 +95,7 @@ Respond in this JSON format:
   ...
 ]
 Products:
-{json.dumps(product_list, indent=2)}
+{json.dumps(product_list[:70], indent=2)}
 """
     response = call_gemini_with_retries(prompt)
     response_text = response.text.strip()

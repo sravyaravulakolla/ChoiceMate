@@ -281,7 +281,7 @@ const Dashboard = () => {
                   {conv.messages[0]?.content.substring(0, 50)}...
                 </div>
                 <div className="conversation-meta">
-                  {new Date(conv.lastActivity).toLocaleDateString()}
+                  {new Date(conv.updatedAt).toLocaleDateString()}
                 </div>
               </div>
             ))}
